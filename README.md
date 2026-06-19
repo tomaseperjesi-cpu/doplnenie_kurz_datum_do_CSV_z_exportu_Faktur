@@ -1,0 +1,1 @@
+# doplnenie_kurz_datum_do_CSV_z_exportu_Faktur
