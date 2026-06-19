@@ -1,57 +1,60 @@
 import streamlit as st
 import pandas as pd
+import xml.etree.ElementTree as ET
 
-st.set_page_config(page_title="Dopĺňač dát do faktúr", layout="wide")
+st.set_page_config(page_title="Dopĺňač dát z XML Pohody", layout="wide")
 
-st.title("Dopĺňanie dát do CSV faktúr")
-st.write("Nahrajte CSV súbory. Používa sa oddeľovač ';' a desatinná čiarka ','.")
+st.title("Dopĺňanie dát z XML Pohody")
+st.write("Nahrajte CSV (hlavný súbor) a XML (export z Pohody).")
 
 # Upload súborov
 col1, col2 = st.columns(2)
 with col1:
     file1 = st.file_uploader("Nahraj hlavný CSV súbor", type=["csv"])
 with col2:
-    file2 = st.file_uploader("Nahraj export z Pohody", type=["csv"])
+    file2 = st.file_uploader("Nahraj XML export z Pohody", type=["xml"])
 
 if file1 and file2:
-    # Načítanie dát s parametrami pre slovenský/český formát CSV
-    # decimal=',' zabezpečí, že čísla s čiarkou budú správne interpretované ako desatinné čísla
+    # 1. Načítanie CSV
     df_main = pd.read_csv(file1, sep=';', decimal=',')
-    df_pohoda = pd.read_csv(file2, sep=';', decimal=',')
 
-    st.write("Ukážka dát hlavného súboru:", df_main.head())
-
-    # Názvy stĺpcov podľa tvojho zadania
-    key_col = "Faktura"
-    col_datum = "Datum"
-    col_kurz = "Kurz"
-
-    if key_col in df_main.columns and key_col in df_pohoda.columns:
-        # Zlúčenie súborov
-        # Vyberáme len potrebné stĺpce z exportu Pohody
-        df_pohoda_subset = df_pohoda[[key_col, col_datum, col_kurz]].copy()
+    # 2. Načítanie a spracovanie XML
+    # Tento blok je potrebné prispôsobiť presnej štruktúre tvojho XML
+    tree = ET.parse(file2)
+    root = tree.getroot()
+    
+    data = []
+    # Tu musíme iterovať cez faktúry v XML. 
+    # V Pohode XML exportoch bývajú faktúry v rôznych menných priestoroch.
+    # Toto je všeobecný prístup, možno bude treba upraviť cestu (find/findall)
+    for invoice in root.findall(".//{http://www.stormware.cz/schema/version_2/invoice.xsd}invoice"):
+        # Nájdenie čísla faktúry (napr. v invoiceHeader/number/numberRequested)
+        number_el = invoice.find(".//{http://www.stormware.cz/schema/version_2/invoice.xsd}numberRequested")
+        # Nájdenie dátumu a kurzu (uprav podľa reálnych tagov v tvojom XML)
+        date_el = invoice.find(".//{http://www.stormware.cz/schema/version_2/invoice.xsd}date")
+        rate_el = invoice.find(".//{http://www.stormware.cz/schema/version_2/invoice.xsd}rate")
         
-        # Spojenie (merge)
-        merged_df = df_main.merge(df_pohoda_subset, on=key_col, how="left", suffixes=('', '_new'))
+        data.append({
+            "Faktura": number_el.text if number_el is not None else None,
+            "Datum": date_el.text if date_el is not None else None,
+            "Kurz": float(rate_el.text.replace(',', '.')) if rate_el is not None else None
+        })
+    
+    df_pohoda = pd.DataFrame(data)
 
-        # Doplnenie dát: ak je pôvodná hodnota prázdna, vezmeme ju z nového stĺpca
-        # (Pandas automaticky pridá príponu _new k stĺpcom z druhého súboru pri konflikte názvov)
-        merged_df[col_datum] = merged_df[col_datum].fillna(merged_df[col_datum + '_new'])
-        merged_df[col_kurz] = merged_df[col_kurz].fillna(merged_df[col_kurz + '_new'])
+    # 3. Spojenie dát
+    key_col = "Faktura"
+    merged_df = df_main.merge(df_pohoda, on=key_col, how="left", suffixes=('', '_new'))
 
-        # Odstránenie pomocných stĺpcov
-        merged_df = merged_df.drop(columns=[col_datum + '_new', col_kurz + '_new'])
+    # Doplnenie dát
+    merged_df['Datum'] = merged_df['Datum'].fillna(merged_df['Datum_new'])
+    merged_df['Kurz'] = merged_df['Kurz'].fillna(merged_df['Kurz_new'])
+    
+    merged_df = merged_df.drop(columns=['Datum_new', 'Kurz_new'])
 
-        st.success("Dáta boli úspešne spojené!")
-        st.write("Výsledná tabuľka:", merged_df.head())
+    st.success("Dáta boli úspešne spojené!")
+    st.write("Výsledná tabuľka:", merged_df.head())
 
-        # Download tlačidlo (pri exporte nastavíme oddeľovač na ';' a desatinnú čiarku na ',')
-        csv = merged_df.to_csv(index=False, sep=';', decimal=',').encode('utf-8-sig') # utf-8-sig pomáha správne zobraziť diakritiku v Exceli
-        st.download_button(
-            "Stiahnuť upravené CSV", 
-            data=csv, 
-            file_name="faktury_doplnene.csv",
-            mime="text/csv"
-        )
-    else:
-        st.error(f"Chyba: Súbory neobsahujú spoločný stĺpec '{key_col}'")
+    # Export
+    csv = merged_df.to_csv(index=False, sep=';', decimal=',').encode('utf-8-sig')
+    st.download_button("Stiahnuť upravené CSV", data=csv, file_name="faktury_doplnene.csv", mime="text/csv")
